@@ -4,6 +4,8 @@ Transcribed from the court's "General Case Search subtypes" PDF
 (probate.franklincountyohio.gov, read Nov 24, 2026).
 """
 
+import re
+
 CASE_TYPES = {
     "C": "Civil Action",
     "E": "Estate",
@@ -53,3 +55,36 @@ ADMIN_TIER = {
     "03": "release", "04": "release", "17": "release",
     "19": "summary", "20": "summary", "21": "summary",
 }
+
+
+def _norm_subtype(text: str) -> str:
+    """Make the court's spellings comparable: 'W/O WILL', 'without Will', 'ADMINISTRATION' vs 'ADMIN'."""
+    t = (text or "").upper()
+    t = t.replace("W/O", " WITHOUT ").replace("W/", " WITH ")
+    t = re.sub(r"[^A-Z0-9 ]", " ", t)
+    t = re.sub(r"\bADMINISTRATION\b", "ADMIN", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+_SUBTYPE_BY_TEXT = {_norm_subtype(desc): code for code, (desc, _) in ESTATE_SUBTYPES.items()}
+
+
+def subtype_code_from_text(text: str) -> str:
+    """Map the subtype wording shown on the index and detail pages to its two-digit code.
+
+    Accepts a leading code ('02 FULL ADMINISTRATION WITHOUT WILL'), exact wording in
+    any of the court's spellings, or a label cut short by the index page's column width.
+    Returns '' when nothing matches.
+    """
+    m = re.match(r"\s*(\d{2})\b", text or "")
+    if m and m.group(1) in ESTATE_SUBTYPES:
+        return m.group(1)
+    key = _norm_subtype(text)
+    if not key:
+        return ""
+    if key in _SUBTYPE_BY_TEXT:
+        return _SUBTYPE_BY_TEXT[key]
+    prefixed = [code for norm, code in _SUBTYPE_BY_TEXT.items() if norm.startswith(key) or key.startswith(norm)]
+    # Prefer the longest matching description so 'WITH WILL FRO' beats 'WITH WILL'.
+    prefixed.sort(key=lambda c: -len(_norm_subtype(ESTATE_SUBTYPES[c][0])))
+    return prefixed[0] if prefixed else ""
