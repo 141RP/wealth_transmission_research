@@ -1,7 +1,12 @@
 """Pull a small, polite sample of Franklin County estate cases into a masked CSV.
 
 Example (run on your own machine, outside 10 PM - 2 AM Eastern):
-    python -m scraper.run_sample --start 2026-11-02 --days 3 --limit 30
+    python -m scraper.run_sample --start 2025-03-03 --days 2 --limit 30 --details
+
+Without --details it reads only the open-date index (about one request per 40
+cases). With --details it also opens each estate's detail, fiduciary and docket
+pages, three more requests per case, which adds date of death, zip, bond,
+inventory value, fiduciary title and attorney presence.
 
 Only masked fields are written to the CSV. Raw pages are cached under data/raw/,
 which git ignores, so re-runs don't hit the court again.
@@ -11,45 +16,69 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import config
 from .client import PoliteClient
-from .franklin import date_index_url, normalize, parse_label_values, parse_tables
+from .franklin import (FIELDS, build_record, case_urls, date_index_url, parse_docket,
+                       parse_estate_detail, parse_fiduciaries, parse_index)
 
-FIELDS = ["county", "case_number", "open_date", "closed_date", "status", "case_type",
-          "subtype_code", "subtype", "has_will", "admin_tier", "decedent_initials",
-          "decedent_id", "fiduciary_id", "has_attorney", "date_of_death", "estate_value"]
+MAX_INDEX_PAGES = 20
+
+
+def _opened(row: dict) -> date | None:
+    try:
+        return datetime.strptime(row.get("opened", ""), "%m/%d/%Y").date()
+    except ValueError:
+        return None
+
+
+def collect(client: PoliteClient, start: date, days: int, limit: int,
+            details: bool, all_types: bool) -> list[dict]:
+    end = start + timedelta(days=days - 1)
+    url: str | None = date_index_url(start)
+    records: list[dict] = []
+    for _ in range(MAX_INDEX_PAGES):
+        if not url:
+            break
+        rows, url = parse_index(client.get(url))
+        for row in rows:
+            opened = _opened(row)
+            if opened and opened > end:
+                return records
+            if opened and opened < start:
+                continue
+            is_estate = row.get("case_type", "").upper() == "ESTATE"
+            if not (is_estate or all_types):
+                continue
+            if details and is_estate:
+                pages = case_urls(row["case_number"])
+                rec = build_record(row,
+                                   parse_estate_detail(client.get(pages["detail"])),
+                                   parse_fiduciaries(client.get(pages["fiduciaries"])),
+                                   parse_docket(client.get(pages["docket"])))
+            else:
+                rec = build_record(row)
+            records.append(rec)
+            if len(records) >= limit:
+                return records
+    return records
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--start", type=date.fromisoformat, required=True, help="first open date, YYYY-MM-DD")
-    ap.add_argument("--days", type=int, default=3, help="how many consecutive days to search")
+    ap.add_argument("--days", type=int, default=1, help="how many consecutive open dates to cover")
     ap.add_argument("--limit", type=int, default=30, help=f"max cases (hard cap {config.DEMO_MAX_CASES})")
-    ap.add_argument("--details", action="store_true", help="also open each case's detail page")
-    ap.add_argument("--all-types", action="store_true", help="keep guardianship, trust and other case types too")
+    ap.add_argument("--details", action="store_true", help="also open each estate's detail, fiduciary and docket pages")
+    ap.add_argument("--all-types", action="store_true", help="keep guardianship and miscellaneous cases too")
     ap.add_argument("--out", type=Path, default=Path("data/sample/franklin_sample_masked.csv"))
     args = ap.parse_args(argv)
 
-    limit = min(args.limit, config.DEMO_MAX_CASES)
     client = PoliteClient()
-    records: list[dict] = []
-    for i in range(args.days):
-        day = args.start + timedelta(days=i)
-        for row in parse_tables(client.get(date_index_url(day))):
-            if args.details and row.get("_links"):
-                detail = parse_label_values(client.get(row["_links"][0]))
-                row = {**detail, **{k: v for k, v in row.items() if v}}
-            rec = normalize(row)
-            if not args.all_types and rec["case_type"] not in ("Estate", "E", ""):
-                continue
-            records.append(rec)
-            if len(records) >= limit:
-                break
-        if len(records) >= limit:
-            break
+    records = collect(client, args.start, max(args.days, 1), min(args.limit, config.DEMO_MAX_CASES),
+                      args.details, args.all_types)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="", encoding="utf-8") as f:
