@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+notebook = ["matplotlib>=3.8", "notebook>=7.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
