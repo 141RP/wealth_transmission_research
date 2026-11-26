@@ -104,3 +104,30 @@ def test_backup_window():
     assert in_backup_window(datetime(2026, 11, 24, 23, 0, tzinfo=COURT_TZ))
     assert in_backup_window(datetime(2026, 11, 24, 1, 30, tzinfo=COURT_TZ))
     assert not in_backup_window(datetime(2026, 11, 24, 10, 0, tzinfo=COURT_TZ))
+
+
+def test_collect_skips_case_repeated_across_index_pages():
+    """The court's next page begins with the last case of the page before it."""
+    from scraper.run_sample import collect
+
+    first = page("index_page.html")
+    # Second page: repeats case 900005 (an estate) at the top, then one new estate.
+    second = first.replace("900001", "900005", 1)
+    for old, new in (("900002", "900007"), ("900003", "900008")):
+        second = second.replace(old, new)
+
+    class FakeClient:
+        requests_made = 0
+
+        def get(self, url):
+            self.requests_made += 1
+            if "stringf=20250304900006" in url:
+                return second.replace("stringf=20250304900006", "stringf=end")
+            if "stringf=end" in url:
+                return "<html></html>"
+            return first
+
+    records = collect(FakeClient(), date(2025, 3, 3), 2, 50, details=False, all_types=False)
+    numbers = [r["case_number"] for r in records]
+    assert len(numbers) == len(set(numbers))
+    assert numbers.count("900005") == 1
