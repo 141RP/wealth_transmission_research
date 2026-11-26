@@ -39,11 +39,15 @@ def collect(client: PoliteClient, start: date, days: int, limit: int,
     end = start + timedelta(days=days - 1)
     url: str | None = date_index_url(start)
     records: list[dict] = []
+    seen: set[str] = set()  # "Next Cases" pages start with the previous page's last case
     for _ in range(MAX_INDEX_PAGES):
         if not url:
             break
         rows, url = parse_index(client.get(url))
         for row in rows:
+            if row["case_number"] in seen:
+                continue
+            seen.add(row["case_number"])
             opened = _opened(row)
             if opened and opened > end:
                 return records
