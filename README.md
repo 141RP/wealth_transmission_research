@@ -43,6 +43,8 @@ python -m scraper.run_sample --start 2025-03-03 --days 2 --limit 30 --details
 python -m scraper.summarize data/sample/franklin_sample_masked.csv
 ```
 
+The charts from the first real run are in [`notebooks/franklin_sample.ipynb`](notebooks/franklin_sample.ipynb).
+
 Without `--details` a run needs about one request per 40 cases; with it, three more per estate (so a 30-case run takes a couple of minutes at the polite rate). The court's search is offline for backup from 10 PM to 2 AM Eastern, and the scraper won't run then.
 
 ## How it behaves
